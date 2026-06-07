@@ -9,6 +9,8 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [react()],
     server: {
+      host: '0.0.0.0',
+      allowedHosts: ['eliasliu.cc'],
       port: Number(env.VITE_PORT ?? 5173),
       proxy: {
         '/api': env.VITE_API_PROXY ?? 'http://127.0.0.1:4310',

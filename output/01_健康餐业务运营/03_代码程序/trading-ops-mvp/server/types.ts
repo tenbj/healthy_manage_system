@@ -224,6 +224,10 @@ export interface ConfirmPaymentInput {
   idempotencyKey: string
 }
 
+export interface BalancePaymentInput {
+  idempotencyKey?: string
+}
+
 export interface SupplierBatchInput {
   supplierId: string
   serviceDate: string

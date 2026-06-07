@@ -3,6 +3,7 @@ import mysql from 'mysql2/promise'
 import { today } from './data/seed.ts'
 import { DomainError, money, newId, type TradingOpsStore } from './store.ts'
 import type {
+  BalancePaymentInput,
   BatchStatus,
   ConfirmPaymentInput,
   CreateCustomerInput,
@@ -273,6 +274,85 @@ export function createMysqlStore(): TradingOpsStore {
             [newId('PR'), customer.id, customer.name, id, 'ORDER_PAYMENT', product.amount, 'WAIT_PAY', '微信', `订单 ${id} 应收`, new Date()],
           )
         }
+        await connection.commit()
+      } catch (error) {
+        await connection.rollback()
+        throw error
+      } finally {
+        connection.release()
+      }
+      return getState()
+    },
+
+    async payOrderWithBalance(orderId: string, input: BalancePaymentInput) {
+      const idempotencyKey = input.idempotencyKey ?? `balance-payment-${orderId}`
+      const connection = await pool.getConnection()
+      try {
+        await connection.beginTransaction()
+        const [ledgerRowsRaw] = await connection.query('SELECT * FROM prepaid_ledger WHERE idempotency_key = ? FOR UPDATE', [
+          idempotencyKey,
+        ])
+        const ledgerRows = ledgerRowsRaw as Row[]
+        if (ledgerRows[0]) {
+          const existingLedger = mapPrepaidLedger(ledgerRows[0])
+          if (existingLedger.orderId === orderId && existingLedger.type === 'DEDUCT') {
+            await connection.commit()
+            return getState()
+          }
+          throw new DomainError('幂等键已被其他余额核销使用')
+        }
+
+        const [orderRowsRaw] = await connection.query('SELECT * FROM orders WHERE id = ? AND deleted_at IS NULL FOR UPDATE', [orderId])
+        const orderRows = orderRowsRaw as Row[]
+        if (!orderRows[0]) throw new DomainError('订单不存在', 404)
+        const order = mapOrder(orderRows[0])
+        if (order.paymentStatus !== 'UNPAID' || order.status !== 'WAIT_PAY') throw new DomainError('订单不可重复核销')
+
+        const [customerRowsRaw] = await connection.query('SELECT * FROM customers WHERE id = ? AND deleted_at IS NULL FOR UPDATE', [
+          order.customerId,
+        ])
+        const customerRows = customerRowsRaw as Row[]
+        if (!customerRows[0]) throw new DomainError('客户不存在', 404)
+        const customer = mapCustomer(customerRows[0])
+        if (customer.balance < order.amount) throw new DomainError('客户余额不足，不能核销')
+
+        const balanceAfter = money(customer.balance - order.amount)
+        await connection.execute('UPDATE customers SET balance = ?, status = ?, updated_at = ? WHERE id = ?', [
+          balanceAfter,
+          'ACTIVE',
+          new Date(),
+          customer.id,
+        ])
+        await connection.execute(
+          `INSERT INTO prepaid_ledger
+            (id, customer_id, order_id, type, amount, balance_after, note, idempotency_key, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            newId('LEDGER'),
+            customer.id,
+            order.id,
+            'DEDUCT',
+            -order.amount,
+            balanceAfter,
+            `余额核销订单 ${order.id}`,
+            idempotencyKey,
+            new Date(),
+          ],
+        )
+        await connection.execute('UPDATE orders SET payment_status = ?, status = ?, updated_at = ? WHERE id = ?', [
+          'PAID',
+          'PAID_WAIT_SUPPLIER',
+          new Date(),
+          order.id,
+        ])
+        await connection.execute(
+          'INSERT INTO order_status_logs (id, order_id, from_status, to_status, note, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+          [newId('LOG'), order.id, order.status, 'PAID_WAIT_SUPPLIER', '余额支付完成，进入待下发供应商', new Date()],
+        )
+        await connection.execute(
+          "UPDATE payment_requests SET status = ?, note = CONCAT(note, ?) WHERE order_id = ? AND status = ?",
+          ['CANCELED', '；取消原因：余额核销已完成', order.id, 'WAIT_PAY'],
+        )
         await connection.commit()
       } catch (error) {
         await connection.rollback()

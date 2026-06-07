@@ -108,6 +108,86 @@ describe('trading ops API', () => {
     expect(orderResponse.body.dashboard.prepaidDeducted).toBeGreaterThanOrEqual(42)
   })
 
+  it('deducts customer balance into an existing wait-pay order', async () => {
+    const server = app()
+    const orderResponse = await request(server)
+      .post('/api/orders')
+      .send({
+        customerId: 'C-001',
+        serviceDate: '2026-06-07',
+        productId: 'P-FAT-A',
+        note: '已有订单余额核销测试',
+      })
+      .expect(201)
+    const order = orderResponse.body.orders.find(
+      (item: { customerId: string; status: string; paymentStatus: string }) =>
+        item.customerId === 'C-001' && item.status === 'WAIT_PAY' && item.paymentStatus === 'UNPAID',
+    )
+
+    const paidResponse = await request(server)
+      .post(`/api/orders/${order.id}/balance-payment`)
+      .send({ idempotencyKey: 'existing-order-balance-key' })
+      .expect(200)
+
+    const paidOrder = paidResponse.body.orders.find((item: { id: string }) => item.id === order.id)
+    const customer = paidResponse.body.customers.find((item: { id: string }) => item.id === 'C-001')
+    const ledger = paidResponse.body.prepaidLedger.find((item: { idempotencyKey: string }) => item.idempotencyKey === 'existing-order-balance-key')
+    const paymentRequest = paidResponse.body.paymentRequests.find((item: { orderId: string }) => item.orderId === order.id)
+    expect(paidOrder.status).toBe('PAID_WAIT_SUPPLIER')
+    expect(paidOrder.paymentStatus).toBe('PAID')
+    expect(customer.balance).toBe(224)
+    expect(ledger.amount).toBe(-38)
+    expect(ledger.balanceAfter).toBe(224)
+    expect(paymentRequest.status).toBe('CANCELED')
+    expect(paymentRequest.note).toContain('取消原因')
+  })
+
+  it('blocks existing-order balance payment when balance is insufficient', async () => {
+    const server = app()
+    const orderResponse = await request(server)
+      .post('/api/orders')
+      .send({
+        customerId: 'C-003',
+        serviceDate: '2026-06-07',
+        productId: 'P-PREMIUM',
+      })
+      .expect(201)
+    const order = orderResponse.body.orders.find(
+      (item: { customerId: string; status: string }) => item.customerId === 'C-003' && item.status === 'WAIT_PAY',
+    )
+
+    const response = await request(server)
+      .post(`/api/orders/${order.id}/balance-payment`)
+      .send({ idempotencyKey: 'existing-insufficient-key' })
+      .expect(400)
+    expect(response.body.error).toContain('余额不足')
+  })
+
+  it('blocks repeat balance deduction on an already paid order', async () => {
+    const server = app()
+    const orderResponse = await request(server)
+      .post('/api/orders')
+      .send({
+        customerId: 'C-001',
+        serviceDate: '2026-06-07',
+        productId: 'P-FAT-A',
+      })
+      .expect(201)
+    const order = orderResponse.body.orders.find(
+      (item: { customerId: string; status: string }) => item.customerId === 'C-001' && item.status === 'WAIT_PAY',
+    )
+    await request(server)
+      .post(`/api/orders/${order.id}/balance-payment`)
+      .send({ idempotencyKey: 'repeat-balance-key-1' })
+      .expect(200)
+
+    const repeat = await request(server)
+      .post(`/api/orders/${order.id}/balance-payment`)
+      .send({ idempotencyKey: 'repeat-balance-key-2' })
+      .expect(400)
+    expect(repeat.body.error).toContain('不可重复核销')
+  })
+
   it('blocks balance deduction when balance is insufficient', async () => {
     const response = await request(app())
       .post('/api/orders')

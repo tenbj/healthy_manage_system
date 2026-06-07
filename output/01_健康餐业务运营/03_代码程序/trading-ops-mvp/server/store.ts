@@ -1,4 +1,5 @@
 import type {
+  BalancePaymentInput,
   ConfirmPaymentInput,
   CreateCustomerInput,
   CreateOrderInput,
@@ -18,6 +19,7 @@ export interface TradingOpsStore {
   updateCustomer(id: string, input: UpdateCustomerInput): Promise<OperationState>
   deleteCustomer(id: string): Promise<OperationState>
   createOrder(input: CreateOrderInput): Promise<OperationState>
+  payOrderWithBalance(orderId: string, input: BalancePaymentInput): Promise<OperationState>
   cancelOrder(orderId: string): Promise<OperationState>
   createPaymentRequest(input: PaymentRequestInput): Promise<OperationState>
   cancelPaymentRequest(paymentRequestId: string): Promise<OperationState>

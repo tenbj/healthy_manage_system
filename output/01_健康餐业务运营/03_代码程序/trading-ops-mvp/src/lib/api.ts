@@ -67,6 +67,11 @@ export const api = {
     request<OperationState>(`/orders/${orderId}/cancel`, {
       method: 'PATCH',
     }),
+  payOrderWithBalance: (orderId: string) =>
+    request<OperationState>(`/orders/${orderId}/balance-payment`, {
+      method: 'POST',
+      body: JSON.stringify({ idempotencyKey: `balance-${orderId}-${Date.now()}` }),
+    }),
   createPaymentRequest: (payload: {
     customerId: string
     orderId?: string | null

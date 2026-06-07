@@ -42,6 +42,10 @@ const confirmPaymentSchema = z.object({
   idempotencyKey: z.string().min(1),
 })
 
+const balancePaymentSchema = z.object({
+  idempotencyKey: z.string().optional(),
+})
+
 const supplierBatchSchema = z.object({
   supplierId: z.string().min(1),
   serviceDate: z.string().min(1),
@@ -107,6 +111,10 @@ export function createApp(store: TradingOpsStore = process.env.DATA_STORE === 'm
 
   app.patch('/api/orders/:id/cancel', async (req: Request, res: Response) => {
     res.json(await store.cancelOrder(String(req.params.id)))
+  })
+
+  app.post('/api/orders/:id/balance-payment', async (req: Request, res: Response) => {
+    res.json(await store.payOrderWithBalance(String(req.params.id), balancePaymentSchema.parse(req.body ?? {})))
   })
 
   app.post('/api/payment-requests', async (req: Request, res: Response) => {

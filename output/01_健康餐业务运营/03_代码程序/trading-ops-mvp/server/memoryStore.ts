@@ -1,6 +1,7 @@
 import { customers as seedCustomers, products as seedProducts, suppliers as seedSuppliers, today } from './data/seed.ts'
 import { DomainError, money, newId, nowIso, type TradingOpsStore } from './store.ts'
 import type {
+  BalancePaymentInput,
   BatchStatus,
   ConfirmPaymentInput,
   CreateCustomerInput,
@@ -246,6 +247,44 @@ export function createMemoryStore(): TradingOpsStore {
         })
       }
 
+      return getState()
+    },
+
+    async payOrderWithBalance(orderId: string, input: BalancePaymentInput) {
+      const order = findOrder(orderId)
+      const idempotencyKey = input.idempotencyKey ?? `balance-payment-${order.id}`
+      const existingLedger = data.prepaidLedger.find((item) => item.idempotencyKey === idempotencyKey)
+      if (existingLedger) {
+        if (existingLedger.orderId === order.id && existingLedger.type === 'DEDUCT') return getState()
+        throw new DomainError('幂等键已被其他余额核销使用')
+      }
+      if (order.paymentStatus !== 'UNPAID' || order.status !== 'WAIT_PAY') throw new DomainError('订单不可重复核销')
+
+      const customer = findCustomer(order.customerId)
+      if (customer.balance < order.amount) throw new DomainError('客户余额不足，不能核销')
+      customer.balance = money(customer.balance - order.amount)
+      customer.status = 'ACTIVE'
+      data.prepaidLedger.unshift({
+        id: newId('LEDGER'),
+        customerId: customer.id,
+        orderId: order.id,
+        type: 'DEDUCT',
+        amount: -order.amount,
+        balanceAfter: customer.balance,
+        note: `余额核销订单 ${order.id}`,
+        idempotencyKey,
+        createdAt: nowIso(),
+      })
+      order.paymentStatus = 'PAID'
+      setOrderStatus(order, 'PAID_WAIT_SUPPLIER', '余额支付完成，进入待下发供应商')
+      data.paymentRequests
+        .filter((request) => request.orderId === order.id && request.status === 'WAIT_PAY')
+        .forEach((request) => {
+          request.status = 'CANCELED'
+          request.note = request.note
+            ? `${request.note}；取消原因：余额核销已完成`
+            : '取消原因：余额核销已完成'
+        })
       return getState()
     },
 
