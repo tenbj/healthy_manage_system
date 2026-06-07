@@ -3,37 +3,46 @@ import type { Customer, Product, Supplier } from '../types.ts'
 export const today = '2026-06-07'
 
 export const suppliers: Supplier[] = [
-  { id: 'S-A', name: 'A小饭桌', contact: '王姐 13800000001' },
-  { id: 'S-B', name: '轻食工坊', contact: '李师傅 13800000002' },
+  { id: 'S-A', name: 'A小饭桌', contact: '王姐 13800000001', status: 'ACTIVE', notes: '常规减脂餐供应商' },
+  { id: 'S-B', name: '轻食工坊', contact: '李师傅 13800000002', status: 'ACTIVE', notes: '控糖与轻食套餐供应商' },
 ]
 
 export const products: Product[] = [
   {
     id: 'P-FAT-A',
     name: '减脂午餐A',
+    category: '单餐',
+    description: '午餐减脂基础款',
     amount: 38,
     supplierCost: 24,
     deliveryCost: 5,
     supplierId: 'S-A',
     supplierName: 'A小饭桌',
+    status: 'ACTIVE',
   },
   {
     id: 'P-FAT-B',
     name: '控糖晚餐B',
+    category: '单餐',
+    description: '控糖晚餐，不加主食',
     amount: 42,
     supplierCost: 26,
     deliveryCost: 6,
     supplierId: 'S-B',
     supplierName: '轻食工坊',
+    status: 'ACTIVE',
   },
   {
     id: 'P-PREMIUM',
     name: '高蛋白全天套餐',
+    category: '套餐',
+    description: '全天高蛋白组合套餐',
     amount: 68,
     supplierCost: 42,
     deliveryCost: 8,
     supplierId: 'S-A',
     supplierName: 'A小饭桌',
+    status: 'ACTIVE',
   },
 ]
 

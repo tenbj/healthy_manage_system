@@ -3,7 +3,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import dotenv from 'dotenv'
 import mysql from 'mysql2/promise'
-import { customers, products, today } from '../data/seed.ts'
+import { customers, products, suppliers, today } from '../data/seed.ts'
 
 dotenv.config({ path: '.env.local' })
 dotenv.config()
@@ -41,7 +41,50 @@ async function connect(url: URL) {
   })
 }
 
+async function ensureColumn(connection: mysql.Connection, table: string, column: string, ddl: string) {
+  const [rows] = await connection.query(
+    `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?`,
+    [table, column],
+  )
+  if ((rows as unknown[]).length === 0) {
+    await connection.query(`ALTER TABLE \`${table}\` ADD COLUMN ${ddl}`)
+  }
+}
+
 async function seed(connection: mysql.Connection) {
+  for (const supplier of suppliers) {
+    await connection.execute(
+      `INSERT INTO suppliers
+        (id, name, contact, status, notes, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE name = VALUES(name), contact = VALUES(contact), status = VALUES(status), notes = VALUES(notes), updated_at = VALUES(updated_at), deleted_at = NULL`,
+      [supplier.id, supplier.name, supplier.contact, supplier.status, supplier.notes, new Date(), new Date()],
+    )
+  }
+
+  for (const product of products) {
+    await connection.execute(
+      `INSERT INTO products
+        (id, name, category, description, amount, supplier_cost, delivery_cost, supplier_id, supplier_name, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE name = VALUES(name), category = VALUES(category), description = VALUES(description), amount = VALUES(amount), supplier_cost = VALUES(supplier_cost), delivery_cost = VALUES(delivery_cost), supplier_id = VALUES(supplier_id), supplier_name = VALUES(supplier_name), status = VALUES(status), updated_at = VALUES(updated_at), deleted_at = NULL`,
+      [
+        product.id,
+        product.name,
+        product.category,
+        product.description,
+        product.amount,
+        product.supplierCost,
+        product.deliveryCost,
+        product.supplierId,
+        product.supplierName,
+        product.status,
+        new Date(),
+        new Date(),
+      ],
+    )
+  }
+
   for (const customer of customers) {
     await connection.execute(
       `INSERT INTO customers
@@ -133,6 +176,9 @@ const database = await ensureDatabase(url)
 const connection = await connect(url)
 const schema = await fs.readFile(path.join(__dirname, 'schema.sql'), 'utf8')
 await connection.query(schema)
+await ensureColumn(connection, 'payments', 'status', "status VARCHAR(32) NOT NULL DEFAULT 'POSTED'")
+await ensureColumn(connection, 'payments', 'voided_at', 'voided_at DATETIME(3) NULL')
+await ensureColumn(connection, 'payments', 'void_reason', 'void_reason TEXT NULL')
 if (process.argv.includes('--seed')) await seed(connection)
 await connection.end()
 

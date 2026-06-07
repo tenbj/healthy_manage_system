@@ -1,6 +1,6 @@
 import dotenv from 'dotenv'
 import mysql from 'mysql2/promise'
-import { products, suppliers, today } from './data/seed.ts'
+import { today } from './data/seed.ts'
 import { DomainError, money, newId, type TradingOpsStore } from './store.ts'
 import type {
   BatchStatus,
@@ -15,11 +15,17 @@ import type {
   PaymentRequest,
   PaymentRequestInput,
   PrepaidLedger,
+  Product,
+  ProductInput,
   ReconciliationIssue,
   RefundInput,
+  Supplier,
   SupplierBatch,
   SupplierBatchInput,
   SupplierBatchItem,
+  SupplierInput,
+  UpdateCustomerInput,
+  VoidPaymentInput,
 } from './types.ts'
 
 dotenv.config({ path: '.env.local' })
@@ -77,6 +83,18 @@ export function createMysqlStore(): TradingOpsStore {
     return mapOrder(rows[0])
   }
 
+  async function findProduct(id: string) {
+    const rows = await query<Row>('SELECT * FROM products WHERE id = ? AND deleted_at IS NULL', [id])
+    if (!rows[0]) throw new DomainError('商品不存在', 404)
+    return mapProduct(rows[0])
+  }
+
+  async function findSupplier(id: string) {
+    const rows = await query<Row>('SELECT * FROM suppliers WHERE id = ? AND deleted_at IS NULL', [id])
+    if (!rows[0]) throw new DomainError('供应商不存在', 404)
+    return mapSupplier(rows[0])
+  }
+
   async function setOrderStatus(order: Order, status: Order['status'], note: string) {
     if (order.status === status) return
     await execute('UPDATE orders SET status = ?, updated_at = ? WHERE id = ?', [status, new Date(), order.id])
@@ -94,11 +112,15 @@ export function createMysqlStore(): TradingOpsStore {
     const ledgerRows = await query<Row>('SELECT * FROM prepaid_ledger ORDER BY created_at DESC')
     const batchRows = await query<Row>('SELECT * FROM supplier_batches ORDER BY created_at DESC')
     const itemRows = await query<Row>('SELECT * FROM supplier_batch_items ORDER BY id ASC')
+    const productRows = await query<Row>('SELECT * FROM products WHERE deleted_at IS NULL ORDER BY created_at DESC')
+    const supplierRows = await query<Row>('SELECT * FROM suppliers WHERE deleted_at IS NULL ORDER BY created_at DESC')
     const customers = customerRows.map(mapCustomer)
     const orders = orderRows.map(mapOrder)
     const paymentRequests = requestRows.map(mapPaymentRequest)
     const payments = paymentRows.map(mapPayment)
     const prepaidLedger = ledgerRows.map(mapPrepaidLedger)
+    const products = productRows.map(mapProduct)
+    const suppliers = supplierRows.map(mapSupplier)
     const supplierBatches = batchRows.map((row) =>
       mapSupplierBatch(
         row,
@@ -145,10 +167,43 @@ export function createMysqlStore(): TradingOpsStore {
       return getState()
     },
 
+    async updateCustomer(id: string, input: UpdateCustomerInput) {
+      await findCustomer(id)
+      await execute(
+        `UPDATE customers
+         SET name = ?, wechat_name = ?, phone = ?, source = ?, address = ?, preference = ?, status = ?, updated_at = ?
+         WHERE id = ? AND deleted_at IS NULL`,
+        [
+          input.name,
+          input.wechatName,
+          input.phone ?? '',
+          input.source,
+          input.address,
+          input.preference,
+          input.status,
+          new Date(),
+          id,
+        ],
+      )
+      await execute('UPDATE orders SET customer_name = ?, updated_at = ? WHERE customer_id = ? AND deleted_at IS NULL', [
+        input.name,
+        new Date(),
+        id,
+      ])
+      await execute('UPDATE payment_requests SET customer_name = ? WHERE customer_id = ?', [input.name, id])
+      return getState()
+    },
+
+    async deleteCustomer(id: string) {
+      await findCustomer(id)
+      await execute('UPDATE customers SET deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL', [new Date(), new Date(), id])
+      return getState()
+    },
+
     async createOrder(input: CreateOrderInput) {
       const customer = await findCustomer(input.customerId)
-      const product = products.find((item) => item.id === input.productId)
-      if (!product) throw new DomainError('餐品不存在', 404)
+      const product = await findProduct(input.productId)
+      if (product.status !== 'ACTIVE') throw new DomainError('商品已停用，不能下单')
       const id = newId('O')
       const status = input.payWithBalance ? 'PAID_WAIT_SUPPLIER' : 'WAIT_PAY'
       const paymentStatus = input.payWithBalance ? 'PAID' : 'UNPAID'
@@ -228,6 +283,19 @@ export function createMysqlStore(): TradingOpsStore {
       return getState()
     },
 
+    async cancelOrder(orderId: string) {
+      const order = await findOrder(orderId)
+      if (order.status === 'CANCELED') return getState()
+      if (order.paymentStatus === 'PAID' || order.status !== 'WAIT_PAY') throw new DomainError('只有未付款待付款订单可以取消')
+      await execute('UPDATE orders SET status = ?, updated_at = ? WHERE id = ?', ['CANCELED', new Date(), order.id])
+      await execute(
+        'INSERT INTO order_status_logs (id, order_id, from_status, to_status, note, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+        [newId('LOG'), order.id, order.status, 'CANCELED', '运营取消订单', new Date()],
+      )
+      await execute('UPDATE payment_requests SET status = ? WHERE order_id = ? AND status = ?', ['CANCELED', order.id, 'WAIT_PAY'])
+      return getState()
+    },
+
     async createPaymentRequest(input: PaymentRequestInput) {
       const customer = await findCustomer(input.customerId)
       if (input.orderId) await findOrder(input.orderId)
@@ -251,6 +319,24 @@ export function createMysqlStore(): TradingOpsStore {
       return getState()
     },
 
+    async cancelPaymentRequest(paymentRequestId: string) {
+      const rows = await query<Row>('SELECT * FROM payment_requests WHERE id = ?', [paymentRequestId])
+      if (!rows[0]) throw new DomainError('付款请求不存在', 404)
+      const request = mapPaymentRequest(rows[0])
+      if (request.status !== 'WAIT_PAY') throw new DomainError('只有待付款请求可以取消')
+      await execute('UPDATE payment_requests SET status = ? WHERE id = ?', ['CANCELED', paymentRequestId])
+      return getState()
+    },
+
+    async deletePaymentRequest(paymentRequestId: string) {
+      const rows = await query<Row>('SELECT * FROM payment_requests WHERE id = ?', [paymentRequestId])
+      if (!rows[0]) throw new DomainError('付款请求不存在', 404)
+      const request = mapPaymentRequest(rows[0])
+      if (request.status !== 'WAIT_PAY') throw new DomainError('只有待付款请求可以删除')
+      await execute('DELETE FROM payment_requests WHERE id = ?', [paymentRequestId])
+      return getState()
+    },
+
     async confirmPayment(input: ConfirmPaymentInput) {
       const existing = await query<Row>('SELECT id FROM payments WHERE idempotency_key = ?', [input.idempotencyKey])
       if (existing[0]) return getState()
@@ -258,6 +344,7 @@ export function createMysqlStore(): TradingOpsStore {
       if (!requestRows[0]) throw new DomainError('付款请求不存在', 404)
       const request = mapPaymentRequest(requestRows[0])
       if (request.status === 'PAID') return getState()
+      if (request.status === 'CANCELED') throw new DomainError('已取消的付款请求不能确认')
       const customer = await findCustomer(request.customerId)
 
       const connection = await pool.getConnection()
@@ -316,9 +403,44 @@ export function createMysqlStore(): TradingOpsStore {
       return getState()
     },
 
+    async voidPayment(paymentId: string, input: VoidPaymentInput) {
+      const rows = await query<Row>('SELECT * FROM payments WHERE id = ?', [paymentId])
+      if (!rows[0]) throw new DomainError('收款记录不存在', 404)
+      const payment = mapPayment(rows[0])
+      if (payment.status === 'VOIDED') return getState()
+      if (payment.type !== 'PREPAID_TOPUP' || payment.amount <= 0) throw new DomainError('只有已确认的预付款充值可以作废')
+      const customer = await findCustomer(payment.customerId)
+      if (customer.balance < payment.amount) throw new DomainError('该充值已被核销，不能直接作废')
+      const balanceAfter = money(customer.balance - payment.amount)
+      const connection = await pool.getConnection()
+      try {
+        await connection.beginTransaction()
+        await connection.execute('UPDATE payments SET status = ?, voided_at = ?, void_reason = ? WHERE id = ?', [
+          'VOIDED',
+          new Date(),
+          input.reason,
+          payment.id,
+        ])
+        await connection.execute('UPDATE customers SET balance = ?, updated_at = ? WHERE id = ?', [balanceAfter, new Date(), customer.id])
+        await connection.execute(
+          `INSERT INTO prepaid_ledger
+            (id, customer_id, order_id, type, amount, balance_after, note, idempotency_key, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [newId('LEDGER'), customer.id, null, 'ADJUST', -payment.amount, balanceAfter, `作废充值 ${payment.id}：${input.reason}`, `void-${payment.id}`, new Date()],
+        )
+        await connection.commit()
+      } catch (error) {
+        await connection.rollback()
+        throw error
+      } finally {
+        connection.release()
+      }
+      return getState()
+    },
+
     async generateSupplierBatch(input: SupplierBatchInput) {
-      const supplier = suppliers.find((item) => item.id === input.supplierId)
-      if (!supplier) throw new DomainError('供应商不存在', 404)
+      const supplier = await findSupplier(input.supplierId)
+      if (supplier.status !== 'ACTIVE') throw new DomainError('供应商已停用，不能生成批次')
       const orders = (await query<Row>(
         'SELECT * FROM orders WHERE supplier_id = ? AND service_date = ? AND status = ? AND deleted_at IS NULL',
         [input.supplierId, input.serviceDate, 'PAID_WAIT_SUPPLIER'],
@@ -412,6 +534,91 @@ export function createMysqlStore(): TradingOpsStore {
       ])
       return getState()
     },
+
+    async createProduct(input: ProductInput) {
+      const supplier = await findSupplier(input.supplierId)
+      await execute(
+        `INSERT INTO products
+          (id, name, category, description, amount, supplier_cost, delivery_cost, supplier_id, supplier_name, status, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          newId('P'),
+          input.name,
+          input.category,
+          input.description ?? '',
+          input.amount,
+          input.supplierCost,
+          input.deliveryCost,
+          supplier.id,
+          supplier.name,
+          input.status ?? 'ACTIVE',
+          new Date(),
+          new Date(),
+        ],
+      )
+      return getState()
+    },
+
+    async updateProduct(id: string, input: ProductInput) {
+      await findProduct(id)
+      const supplier = await findSupplier(input.supplierId)
+      await execute(
+        `UPDATE products
+         SET name = ?, category = ?, description = ?, amount = ?, supplier_cost = ?, delivery_cost = ?, supplier_id = ?, supplier_name = ?, status = ?, updated_at = ?
+         WHERE id = ? AND deleted_at IS NULL`,
+        [
+          input.name,
+          input.category,
+          input.description ?? '',
+          input.amount,
+          input.supplierCost,
+          input.deliveryCost,
+          supplier.id,
+          supplier.name,
+          input.status ?? 'ACTIVE',
+          new Date(),
+          id,
+        ],
+      )
+      return getState()
+    },
+
+    async deleteProduct(id: string) {
+      await findProduct(id)
+      await execute('UPDATE products SET status = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL', ['INACTIVE', new Date(), id])
+      return getState()
+    },
+
+    async createSupplier(input: SupplierInput) {
+      await execute(
+        `INSERT INTO suppliers
+          (id, name, contact, status, notes, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [newId('S'), input.name, input.contact, input.status ?? 'ACTIVE', input.notes ?? '', new Date(), new Date()],
+      )
+      return getState()
+    },
+
+    async updateSupplier(id: string, input: SupplierInput) {
+      await findSupplier(id)
+      await execute(
+        'UPDATE suppliers SET name = ?, contact = ?, status = ?, notes = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL',
+        [input.name, input.contact, input.status ?? 'ACTIVE', input.notes ?? '', new Date(), id],
+      )
+      await execute('UPDATE products SET supplier_name = ?, updated_at = ? WHERE supplier_id = ? AND deleted_at IS NULL', [
+        input.name,
+        new Date(),
+        id,
+      ])
+      return getState()
+    },
+
+    async deleteSupplier(id: string) {
+      await findSupplier(id)
+      await execute('UPDATE suppliers SET status = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL', ['INACTIVE', new Date(), id])
+      await execute('UPDATE products SET status = ?, updated_at = ? WHERE supplier_id = ? AND deleted_at IS NULL', ['INACTIVE', new Date(), id])
+      return getState()
+    },
   }
 }
 
@@ -477,6 +684,9 @@ function mapPayment(row: Row): Payment {
     method: String(row.method),
     idempotencyKey: String(row.idempotency_key),
     createdAt: dateText(row.created_at),
+    status: (row.status ?? 'POSTED') as Payment['status'],
+    voidedAt: row.voided_at ? dateText(row.voided_at) : null,
+    voidReason: row.void_reason ? String(row.void_reason) : null,
   }
 }
 
@@ -521,6 +731,31 @@ function mapSupplierBatchItem(row: Row): SupplierBatchItem {
     note: String(row.note),
     amount: asNumber(row.amount),
     supplierCost: asNumber(row.supplier_cost),
+  }
+}
+
+function mapProduct(row: Row): Product {
+  return {
+    id: String(row.id),
+    name: String(row.name),
+    category: String(row.category),
+    description: String(row.description),
+    amount: asNumber(row.amount),
+    supplierCost: asNumber(row.supplier_cost),
+    deliveryCost: asNumber(row.delivery_cost),
+    supplierId: String(row.supplier_id),
+    supplierName: String(row.supplier_name),
+    status: row.status as Product['status'],
+  }
+}
+
+function mapSupplier(row: Row): Supplier {
+  return {
+    id: String(row.id),
+    name: String(row.name),
+    contact: String(row.contact),
+    status: row.status as Supplier['status'],
+    notes: String(row.notes),
   }
 }
 
@@ -583,8 +818,9 @@ function calculateDashboard(
 ): DashboardSummary {
   const ordersToday = orders.filter((order) => order.serviceDate === today)
   const paidOrders = ordersToday.filter((order) => order.paymentStatus === 'PAID' || order.paymentStatus === 'REFUNDED')
-  const paymentsToday = payments.filter((payment) => payment.createdAt.slice(0, 10) === today)
+  const paymentsToday = payments.filter((payment) => payment.status === 'POSTED' && payment.createdAt.slice(0, 10) === today)
   const ledgersToday = prepaidLedger.filter((ledger) => ledger.createdAt.slice(0, 10) === today)
+  const prepaidAdjustment = ledgersToday.filter((ledger) => ledger.type === 'ADJUST').reduce((sum, ledger) => sum + ledger.amount, 0)
   const refund = money(
     paymentsToday.filter((payment) => payment.type === 'REFUND').reduce((sum, payment) => sum + Math.abs(payment.amount), 0),
   )
@@ -596,7 +832,7 @@ function calculateDashboard(
     unconfirmedBatchCount: supplierBatches.filter((batch) => batch.status !== 'CONFIRMED').length,
     revenue: money(paidOrders.reduce((sum, order) => sum + order.amount, 0) - refund),
     cashIn: money(paymentsToday.filter((payment) => payment.amount > 0).reduce((sum, payment) => sum + payment.amount, 0)),
-    prepaidTopup: money(ledgersToday.filter((ledger) => ledger.type === 'TOPUP').reduce((sum, ledger) => sum + ledger.amount, 0)),
+    prepaidTopup: money(ledgersToday.filter((ledger) => ledger.type === 'TOPUP').reduce((sum, ledger) => sum + ledger.amount, 0) + prepaidAdjustment),
     prepaidDeducted: money(
       Math.abs(ledgersToday.filter((ledger) => ledger.type === 'DEDUCT').reduce((sum, ledger) => sum + ledger.amount, 0)),
     ),

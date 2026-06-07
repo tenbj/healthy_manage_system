@@ -4,20 +4,36 @@ import type {
   CreateOrderInput,
   OperationState,
   PaymentRequestInput,
+  ProductInput,
   RefundInput,
+  SupplierInput,
   SupplierBatchInput,
+  UpdateCustomerInput,
+  VoidPaymentInput,
 } from './types.ts'
 
 export interface TradingOpsStore {
   getState(): Promise<OperationState>
   createCustomer(input: CreateCustomerInput): Promise<OperationState>
+  updateCustomer(id: string, input: UpdateCustomerInput): Promise<OperationState>
+  deleteCustomer(id: string): Promise<OperationState>
   createOrder(input: CreateOrderInput): Promise<OperationState>
+  cancelOrder(orderId: string): Promise<OperationState>
   createPaymentRequest(input: PaymentRequestInput): Promise<OperationState>
+  cancelPaymentRequest(paymentRequestId: string): Promise<OperationState>
+  deletePaymentRequest(paymentRequestId: string): Promise<OperationState>
   confirmPayment(input: ConfirmPaymentInput): Promise<OperationState>
+  voidPayment(paymentId: string, input: VoidPaymentInput): Promise<OperationState>
   generateSupplierBatch(input: SupplierBatchInput): Promise<OperationState>
   confirmSupplierBatch(batchId: string): Promise<OperationState>
   completeOrder(orderId: string): Promise<OperationState>
   refundOrder(input: RefundInput): Promise<OperationState>
+  createProduct(input: ProductInput): Promise<OperationState>
+  updateProduct(id: string, input: ProductInput): Promise<OperationState>
+  deleteProduct(id: string): Promise<OperationState>
+  createSupplier(input: SupplierInput): Promise<OperationState>
+  updateSupplier(id: string, input: SupplierInput): Promise<OperationState>
+  deleteSupplier(id: string): Promise<OperationState>
 }
 
 export class DomainError extends Error {

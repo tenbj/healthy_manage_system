@@ -1,4 +1,4 @@
-import { customers as seedCustomers, products, suppliers, today } from './data/seed.ts'
+import { customers as seedCustomers, products as seedProducts, suppliers as seedSuppliers, today } from './data/seed.ts'
 import { DomainError, money, newId, nowIso, type TradingOpsStore } from './store.ts'
 import type {
   BatchStatus,
@@ -15,11 +15,17 @@ import type {
   PaymentRequest,
   PaymentRequestInput,
   PrepaidLedger,
+  Product,
+  ProductInput,
   ReconciliationIssue,
   RefundInput,
+  Supplier,
   SupplierBatch,
   SupplierBatchInput,
   SupplierBatchItem,
+  SupplierInput,
+  UpdateCustomerInput,
+  VoidPaymentInput,
 } from './types.ts'
 
 interface MemoryData {
@@ -31,6 +37,8 @@ interface MemoryData {
   prepaidLedger: PrepaidLedger[]
   supplierBatches: SupplierBatch[]
   issues: ReconciliationIssue[]
+  products: Product[]
+  suppliers: Supplier[]
 }
 
 export function createMemoryStore(): TradingOpsStore {
@@ -43,6 +51,8 @@ export function createMemoryStore(): TradingOpsStore {
     prepaidLedger: [],
     supplierBatches: [],
     issues: [],
+    products: seedProducts.map((product) => ({ ...product })),
+    suppliers: seedSuppliers.map((supplier) => ({ ...supplier })),
   }
 
   seedInitialOrders(data)
@@ -57,6 +67,18 @@ export function createMemoryStore(): TradingOpsStore {
     const order = data.orders.find((item) => item.id === id)
     if (!order) throw new DomainError('订单不存在', 404)
     return order
+  }
+
+  function findProduct(id: string) {
+    const product = data.products.find((item) => item.id === id)
+    if (!product) throw new DomainError('商品不存在', 404)
+    return product
+  }
+
+  function findSupplier(id: string) {
+    const supplier = data.suppliers.find((item) => item.id === id)
+    if (!supplier) throw new DomainError('供应商不存在', 404)
+    return supplier
   }
 
   function setOrderStatus(order: Order, status: OrderStatus, note: string) {
@@ -99,8 +121,8 @@ export function createMemoryStore(): TradingOpsStore {
       prepaidLedger: [...data.prepaidLedger].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
       supplierBatches: [...data.supplierBatches].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
       issues: [...data.issues],
-      products,
-      suppliers,
+      products: [...data.products],
+      suppliers: [...data.suppliers],
     })
   }
 
@@ -124,6 +146,37 @@ export function createMemoryStore(): TradingOpsStore {
       return getState()
     },
 
+    async updateCustomer(id: string, input: UpdateCustomerInput) {
+      const customer = findCustomer(id)
+      Object.assign(customer, {
+        name: input.name,
+        wechatName: input.wechatName,
+        phone: input.phone ?? '',
+        source: input.source,
+        address: input.address,
+        preference: input.preference,
+        status: input.status,
+      })
+      data.orders
+        .filter((order) => order.customerId === customer.id)
+        .forEach((order) => {
+          order.customerName = customer.name
+        })
+      data.paymentRequests
+        .filter((request) => request.customerId === customer.id)
+        .forEach((request) => {
+          request.customerName = customer.name
+        })
+      return getState()
+    },
+
+    async deleteCustomer(id: string) {
+      const customer = findCustomer(id)
+      data.customers = data.customers.filter((item) => item.id !== customer.id)
+      if (data.customers.length === 0) data.customers = []
+      return getState()
+    },
+
     async createOrder(input: CreateOrderInput) {
       if (input.idempotencyKey) {
         const existingLedger = data.prepaidLedger.find((item) => item.idempotencyKey === input.idempotencyKey)
@@ -131,7 +184,7 @@ export function createMemoryStore(): TradingOpsStore {
       }
 
       const customer = findCustomer(input.customerId)
-      const product = products.find((item) => item.id === input.productId)
+      const product = data.products.find((item) => item.id === input.productId && item.status === 'ACTIVE')
       if (!product) throw new DomainError('餐品不存在', 404)
 
       const order: Order = {
@@ -196,6 +249,19 @@ export function createMemoryStore(): TradingOpsStore {
       return getState()
     },
 
+    async cancelOrder(orderId: string) {
+      const order = findOrder(orderId)
+      if (order.status === 'CANCELED') return getState()
+      if (order.paymentStatus === 'PAID' || order.status !== 'WAIT_PAY') throw new DomainError('只有未付款待付款订单可以取消')
+      setOrderStatus(order, 'CANCELED', '运营取消订单')
+      data.paymentRequests
+        .filter((request) => request.orderId === order.id && request.status === 'WAIT_PAY')
+        .forEach((request) => {
+          request.status = 'CANCELED'
+        })
+      return getState()
+    },
+
     async createPaymentRequest(input: PaymentRequestInput) {
       const customer = findCustomer(input.customerId)
       if (input.orderId) findOrder(input.orderId)
@@ -215,6 +281,22 @@ export function createMemoryStore(): TradingOpsStore {
       return getState()
     },
 
+    async cancelPaymentRequest(paymentRequestId: string) {
+      const request = data.paymentRequests.find((item) => item.id === paymentRequestId)
+      if (!request) throw new DomainError('付款请求不存在', 404)
+      if (request.status !== 'WAIT_PAY') throw new DomainError('只有待付款请求可以取消')
+      request.status = 'CANCELED'
+      return getState()
+    },
+
+    async deletePaymentRequest(paymentRequestId: string) {
+      const request = data.paymentRequests.find((item) => item.id === paymentRequestId)
+      if (!request) throw new DomainError('付款请求不存在', 404)
+      if (request.status !== 'WAIT_PAY') throw new DomainError('只有待付款请求可以删除')
+      data.paymentRequests = data.paymentRequests.filter((item) => item.id !== paymentRequestId)
+      return getState()
+    },
+
     async confirmPayment(input: ConfirmPaymentInput) {
       const existing = data.payments.find((item) => item.idempotencyKey === input.idempotencyKey)
       if (existing) return getState()
@@ -222,6 +304,7 @@ export function createMemoryStore(): TradingOpsStore {
       const request = data.paymentRequests.find((item) => item.id === input.paymentRequestId)
       if (!request) throw new DomainError('付款请求不存在', 404)
       if (request.status === 'PAID') return getState()
+      if (request.status === 'CANCELED') throw new DomainError('已取消的付款请求不能确认')
 
       const customer = findCustomer(request.customerId)
       const payment: Payment = {
@@ -234,6 +317,9 @@ export function createMemoryStore(): TradingOpsStore {
         method: input.method,
         idempotencyKey: input.idempotencyKey,
         createdAt: nowIso(),
+        status: 'POSTED',
+        voidedAt: null,
+        voidReason: null,
       }
       data.payments.unshift(payment)
       request.status = 'PAID'
@@ -263,8 +349,33 @@ export function createMemoryStore(): TradingOpsStore {
       return getState()
     },
 
+    async voidPayment(paymentId: string, input: VoidPaymentInput) {
+      const payment = data.payments.find((item) => item.id === paymentId)
+      if (!payment) throw new DomainError('收款记录不存在', 404)
+      if (payment.status === 'VOIDED') return getState()
+      if (payment.type !== 'PREPAID_TOPUP' || payment.amount <= 0) throw new DomainError('只有已确认的预付款充值可以作废')
+      const customer = findCustomer(payment.customerId)
+      if (customer.balance < payment.amount) throw new DomainError('该充值已被核销，不能直接作废')
+      customer.balance = money(customer.balance - payment.amount)
+      payment.status = 'VOIDED'
+      payment.voidedAt = nowIso()
+      payment.voidReason = input.reason
+      data.prepaidLedger.unshift({
+        id: newId('LEDGER'),
+        customerId: customer.id,
+        orderId: null,
+        type: 'ADJUST',
+        amount: -payment.amount,
+        balanceAfter: customer.balance,
+        note: `作废充值 ${payment.id}：${input.reason}`,
+        idempotencyKey: `void-${payment.id}`,
+        createdAt: nowIso(),
+      })
+      return getState()
+    },
+
     async generateSupplierBatch(input: SupplierBatchInput) {
-      const supplier = suppliers.find((item) => item.id === input.supplierId)
+      const supplier = data.suppliers.find((item) => item.id === input.supplierId && item.status === 'ACTIVE')
       if (!supplier) throw new DomainError('供应商不存在', 404)
 
       const existing = data.supplierBatches.find(
@@ -348,10 +459,86 @@ export function createMemoryStore(): TradingOpsStore {
         method: '人工退款',
         idempotencyKey: input.idempotencyKey,
         createdAt: nowIso(),
+        status: 'POSTED',
+        voidedAt: null,
+        voidReason: null,
       })
       order.grossProfit = money(order.grossProfit - input.amount)
       order.paymentStatus = 'REFUNDED'
       setOrderStatus(order, 'REFUNDED', input.reason)
+      return getState()
+    },
+
+    async createProduct(input: ProductInput) {
+      const supplier = findSupplier(input.supplierId)
+      data.products.unshift({
+        id: newId('P'),
+        name: input.name,
+        category: input.category,
+        description: input.description ?? '',
+        amount: input.amount,
+        supplierCost: input.supplierCost,
+        deliveryCost: input.deliveryCost,
+        supplierId: supplier.id,
+        supplierName: supplier.name,
+        status: input.status ?? 'ACTIVE',
+      })
+      return getState()
+    },
+
+    async updateProduct(id: string, input: ProductInput) {
+      const product = findProduct(id)
+      const supplier = findSupplier(input.supplierId)
+      Object.assign(product, {
+        name: input.name,
+        category: input.category,
+        description: input.description ?? '',
+        amount: input.amount,
+        supplierCost: input.supplierCost,
+        deliveryCost: input.deliveryCost,
+        supplierId: supplier.id,
+        supplierName: supplier.name,
+        status: input.status ?? 'ACTIVE',
+      })
+      return getState()
+    },
+
+    async deleteProduct(id: string) {
+      const product = findProduct(id)
+      product.status = 'INACTIVE'
+      return getState()
+    },
+
+    async createSupplier(input: SupplierInput) {
+      data.suppliers.unshift({
+        id: newId('S'),
+        name: input.name,
+        contact: input.contact,
+        status: input.status ?? 'ACTIVE',
+        notes: input.notes ?? '',
+      })
+      return getState()
+    },
+
+    async updateSupplier(id: string, input: SupplierInput) {
+      const supplier = findSupplier(id)
+      Object.assign(supplier, {
+        name: input.name,
+        contact: input.contact,
+        status: input.status ?? 'ACTIVE',
+        notes: input.notes ?? '',
+      })
+      data.products
+        .filter((product) => product.supplierId === supplier.id)
+        .forEach((product) => {
+          product.supplierName = supplier.name
+        })
+      return getState()
+    },
+
+    async deleteSupplier(id: string) {
+      const supplier = findSupplier(id)
+      supplier.status = 'INACTIVE'
       return getState()
     },
   }
@@ -360,8 +547,8 @@ export function createMemoryStore(): TradingOpsStore {
 function seedInitialOrders(data: MemoryData) {
   const zhang = data.customers[0]
   const li = data.customers[2]
-  const productA = products[0]
-  const productB = products[1]
+  const productA = data.products[0]
+  const productB = data.products[1]
   data.orders.push(
     {
       id: 'O-001',
@@ -427,8 +614,9 @@ function seedInitialOrders(data: MemoryData) {
 function calculateDashboard(data: MemoryData): DashboardSummary {
   const orders = data.orders.filter((order) => order.serviceDate === today)
   const paidOrders = orders.filter((order) => order.paymentStatus === 'PAID' || order.paymentStatus === 'REFUNDED')
-  const paymentsToday = data.payments.filter((payment) => payment.createdAt.slice(0, 10) === today)
+  const paymentsToday = data.payments.filter((payment) => payment.status === 'POSTED' && payment.createdAt.slice(0, 10) === today)
   const ledgersToday = data.prepaidLedger.filter((ledger) => ledger.createdAt.slice(0, 10) === today)
+  const prepaidAdjustment = ledgersToday.filter((ledger) => ledger.type === 'ADJUST').reduce((sum, ledger) => sum + ledger.amount, 0)
   const revenue = money(paidOrders.reduce((sum, order) => sum + order.amount, 0))
   const refund = money(
     paymentsToday.filter((payment) => payment.type === 'REFUND').reduce((sum, payment) => sum + Math.abs(payment.amount), 0),
@@ -441,7 +629,7 @@ function calculateDashboard(data: MemoryData): DashboardSummary {
     unconfirmedBatchCount: data.supplierBatches.filter((batch) => batch.status !== 'CONFIRMED').length,
     revenue: money(revenue - refund),
     cashIn: money(paymentsToday.filter((payment) => payment.amount > 0).reduce((sum, payment) => sum + payment.amount, 0)),
-    prepaidTopup: money(ledgersToday.filter((ledger) => ledger.type === 'TOPUP').reduce((sum, ledger) => sum + ledger.amount, 0)),
+    prepaidTopup: money(ledgersToday.filter((ledger) => ledger.type === 'TOPUP').reduce((sum, ledger) => sum + ledger.amount, 0) + prepaidAdjustment),
     prepaidDeducted: money(
       Math.abs(ledgersToday.filter((ledger) => ledger.type === 'DEDUCT').reduce((sum, ledger) => sum + ledger.amount, 0)),
     ),

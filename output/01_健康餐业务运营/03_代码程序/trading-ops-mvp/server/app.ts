@@ -14,6 +14,10 @@ const customerSchema = z.object({
   preference: z.string().min(1),
 })
 
+const updateCustomerSchema = customerSchema.extend({
+  status: z.enum(['NEW', 'QUOTED', 'WAIT_PAY', 'ACTIVE', 'REPEAT', 'LOST']),
+})
+
 const orderSchema = z.object({
   customerId: z.string().min(1),
   serviceDate: z.string().min(1),
@@ -50,6 +54,28 @@ const refundSchema = z.object({
   idempotencyKey: z.string().min(1),
 })
 
+const productSchema = z.object({
+  name: z.string().min(1),
+  category: z.string().min(1),
+  description: z.string().optional(),
+  amount: z.number().positive(),
+  supplierCost: z.number().nonnegative(),
+  deliveryCost: z.number().nonnegative(),
+  supplierId: z.string().min(1),
+  status: z.enum(['ACTIVE', 'INACTIVE']).optional(),
+})
+
+const supplierSchema = z.object({
+  name: z.string().min(1),
+  contact: z.string().min(1),
+  status: z.enum(['ACTIVE', 'INACTIVE']).optional(),
+  notes: z.string().optional(),
+})
+
+const voidPaymentSchema = z.object({
+  reason: z.string().min(1),
+})
+
 export function createApp(store: TradingOpsStore = process.env.DATA_STORE === 'mysql' ? createMysqlStore() : createMemoryStore()) {
   const app = express()
   app.use(cors())
@@ -67,16 +93,40 @@ export function createApp(store: TradingOpsStore = process.env.DATA_STORE === 'm
     res.status(201).json(await store.createCustomer(customerSchema.parse(req.body)))
   })
 
+  app.patch('/api/customers/:id', async (req: Request, res: Response) => {
+    res.json(await store.updateCustomer(String(req.params.id), updateCustomerSchema.parse(req.body)))
+  })
+
+  app.delete('/api/customers/:id', async (req: Request, res: Response) => {
+    res.json(await store.deleteCustomer(String(req.params.id)))
+  })
+
   app.post('/api/orders', async (req: Request, res: Response) => {
     res.status(201).json(await store.createOrder(orderSchema.parse(req.body)))
+  })
+
+  app.patch('/api/orders/:id/cancel', async (req: Request, res: Response) => {
+    res.json(await store.cancelOrder(String(req.params.id)))
   })
 
   app.post('/api/payment-requests', async (req: Request, res: Response) => {
     res.status(201).json(await store.createPaymentRequest(paymentRequestSchema.parse(req.body)))
   })
 
+  app.patch('/api/payment-requests/:id/cancel', async (req: Request, res: Response) => {
+    res.json(await store.cancelPaymentRequest(String(req.params.id)))
+  })
+
+  app.delete('/api/payment-requests/:id', async (req: Request, res: Response) => {
+    res.json(await store.deletePaymentRequest(String(req.params.id)))
+  })
+
   app.post('/api/payments/confirm', async (req: Request, res: Response) => {
     res.json(await store.confirmPayment(confirmPaymentSchema.parse(req.body)))
+  })
+
+  app.post('/api/payments/:id/void', async (req: Request, res: Response) => {
+    res.json(await store.voidPayment(String(req.params.id), voidPaymentSchema.parse(req.body)))
   })
 
   app.post('/api/supplier-batches', async (req: Request, res: Response) => {
@@ -93,6 +143,30 @@ export function createApp(store: TradingOpsStore = process.env.DATA_STORE === 'm
 
   app.post('/api/refunds', async (req: Request, res: Response) => {
     res.status(201).json(await store.refundOrder(refundSchema.parse(req.body)))
+  })
+
+  app.post('/api/products', async (req: Request, res: Response) => {
+    res.status(201).json(await store.createProduct(productSchema.parse(req.body)))
+  })
+
+  app.patch('/api/products/:id', async (req: Request, res: Response) => {
+    res.json(await store.updateProduct(String(req.params.id), productSchema.parse(req.body)))
+  })
+
+  app.delete('/api/products/:id', async (req: Request, res: Response) => {
+    res.json(await store.deleteProduct(String(req.params.id)))
+  })
+
+  app.post('/api/suppliers', async (req: Request, res: Response) => {
+    res.status(201).json(await store.createSupplier(supplierSchema.parse(req.body)))
+  })
+
+  app.patch('/api/suppliers/:id', async (req: Request, res: Response) => {
+    res.json(await store.updateSupplier(String(req.params.id), supplierSchema.parse(req.body)))
+  })
+
+  app.delete('/api/suppliers/:id', async (req: Request, res: Response) => {
+    res.json(await store.deleteSupplier(String(req.params.id)))
   })
 
   app.use((error: unknown, _req: Request, res: Response, _next: express.NextFunction) => {

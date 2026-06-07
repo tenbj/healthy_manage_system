@@ -1,4 +1,4 @@
-import type { OperationState, PaymentRequestType } from '../types/domain'
+import type { CustomerStatus, OperationState, PaymentRequestType, ProductStatus, SupplierStatus } from '../types/domain'
 
 const apiBase = (import.meta.env.VITE_API_BASE as string | undefined) ?? '/api'
 
@@ -31,6 +31,26 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+  updateCustomer: (
+    id: string,
+    payload: {
+      name: string
+      wechatName: string
+      phone?: string
+      source: string
+      address: string
+      preference: string
+      status: CustomerStatus
+    },
+  ) =>
+    request<OperationState>(`/customers/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
+  deleteCustomer: (id: string) =>
+    request<OperationState>(`/customers/${id}`, {
+      method: 'DELETE',
+    }),
   createOrder: (payload: {
     customerId: string
     serviceDate: string
@@ -42,6 +62,10 @@ export const api = {
     request<OperationState>('/orders', {
       method: 'POST',
       body: JSON.stringify(payload),
+    }),
+  cancelOrder: (orderId: string) =>
+    request<OperationState>(`/orders/${orderId}/cancel`, {
+      method: 'PATCH',
     }),
   createPaymentRequest: (payload: {
     customerId: string
@@ -55,6 +79,14 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+  cancelPaymentRequest: (paymentRequestId: string) =>
+    request<OperationState>(`/payment-requests/${paymentRequestId}/cancel`, {
+      method: 'PATCH',
+    }),
+  deletePaymentRequest: (paymentRequestId: string) =>
+    request<OperationState>(`/payment-requests/${paymentRequestId}`, {
+      method: 'DELETE',
+    }),
   confirmPayment: (paymentRequestId: string) =>
     request<OperationState>('/payments/confirm', {
       method: 'POST',
@@ -63,6 +95,11 @@ export const api = {
         method: '微信',
         idempotencyKey: `ui-${paymentRequestId}`,
       }),
+    }),
+  voidPayment: (paymentId: string, reason: string) =>
+    request<OperationState>(`/payments/${paymentId}/void`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
     }),
   generateBatch: (supplierId: string, serviceDate: string) =>
     request<OperationState>('/supplier-batches', {
@@ -86,5 +123,54 @@ export const api = {
         reason: '运营登记退款',
         idempotencyKey: `refund-${orderId}-${amount}`,
       }),
+    }),
+  createProduct: (payload: {
+    name: string
+    category: string
+    description?: string
+    amount: number
+    supplierCost: number
+    deliveryCost: number
+    supplierId: string
+    status?: ProductStatus
+  }) =>
+    request<OperationState>('/products', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  updateProduct: (
+    id: string,
+    payload: {
+      name: string
+      category: string
+      description?: string
+      amount: number
+      supplierCost: number
+      deliveryCost: number
+      supplierId: string
+      status?: ProductStatus
+    },
+  ) =>
+    request<OperationState>(`/products/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
+  deleteProduct: (id: string) =>
+    request<OperationState>(`/products/${id}`, {
+      method: 'DELETE',
+    }),
+  createSupplier: (payload: { name: string; contact: string; status?: SupplierStatus; notes?: string }) =>
+    request<OperationState>('/suppliers', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  updateSupplier: (id: string, payload: { name: string; contact: string; status?: SupplierStatus; notes?: string }) =>
+    request<OperationState>(`/suppliers/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
+  deleteSupplier: (id: string) =>
+    request<OperationState>(`/suppliers/${id}`, {
+      method: 'DELETE',
     }),
 }

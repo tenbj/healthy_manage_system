@@ -14,6 +14,36 @@ CREATE TABLE IF NOT EXISTS customers (
   INDEX idx_customers_status (status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+CREATE TABLE IF NOT EXISTS suppliers (
+  id VARCHAR(32) PRIMARY KEY,
+  name VARCHAR(80) NOT NULL,
+  contact VARCHAR(120) NOT NULL,
+  status VARCHAR(32) NOT NULL,
+  notes TEXT NOT NULL,
+  created_at DATETIME(3) NOT NULL,
+  updated_at DATETIME(3) NOT NULL,
+  deleted_at DATETIME(3) NULL,
+  INDEX idx_suppliers_status (status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS products (
+  id VARCHAR(32) PRIMARY KEY,
+  name VARCHAR(120) NOT NULL,
+  category VARCHAR(40) NOT NULL,
+  description TEXT NOT NULL,
+  amount DECIMAL(12,2) NOT NULL,
+  supplier_cost DECIMAL(12,2) NOT NULL,
+  delivery_cost DECIMAL(12,2) NOT NULL,
+  supplier_id VARCHAR(32) NOT NULL,
+  supplier_name VARCHAR(80) NOT NULL,
+  status VARCHAR(32) NOT NULL,
+  created_at DATETIME(3) NOT NULL,
+  updated_at DATETIME(3) NOT NULL,
+  deleted_at DATETIME(3) NULL,
+  INDEX idx_products_supplier_id (supplier_id),
+  INDEX idx_products_status (status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 CREATE TABLE IF NOT EXISTS orders (
   id VARCHAR(32) PRIMARY KEY,
   customer_id VARCHAR(32) NOT NULL,
@@ -74,9 +104,13 @@ CREATE TABLE IF NOT EXISTS payments (
   method VARCHAR(40) NOT NULL,
   idempotency_key VARCHAR(120) NOT NULL,
   created_at DATETIME(3) NOT NULL,
+  status VARCHAR(32) NOT NULL DEFAULT 'POSTED',
+  voided_at DATETIME(3) NULL,
+  void_reason TEXT NULL,
   UNIQUE KEY uniq_payments_idempotency (idempotency_key),
   INDEX idx_payments_customer_id (customer_id),
-  INDEX idx_payments_order_id (order_id)
+  INDEX idx_payments_order_id (order_id),
+  INDEX idx_payments_status (status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS prepaid_ledger (

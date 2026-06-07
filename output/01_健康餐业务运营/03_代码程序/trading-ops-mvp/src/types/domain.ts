@@ -9,7 +9,13 @@ export type OrderStatus =
   | 'REFUNDED'
   | 'CANCELED'
 export type PaymentRequestType = 'ORDER_PAYMENT' | 'PREPAID_TOPUP' | 'BALANCE_SHORTFALL'
+export type PaymentRequestStatus = 'WAIT_PAY' | 'PAID' | 'CANCELED'
+export type PaymentType = 'ORDER_PAYMENT' | 'PREPAID_TOPUP' | 'REFUND'
+export type PaymentStatus = 'POSTED' | 'VOIDED'
+export type LedgerType = 'TOPUP' | 'DEDUCT' | 'REFUND' | 'ADJUST'
 export type BatchStatus = 'GENERATED' | 'SENT' | 'CONFIRMED'
+export type ProductStatus = 'ACTIVE' | 'INACTIVE'
+export type SupplierStatus = 'ACTIVE' | 'INACTIVE'
 
 export interface Customer {
   id: string
@@ -49,21 +55,37 @@ export interface PaymentRequest {
   orderId: string | null
   type: PaymentRequestType
   amount: number
-  status: 'WAIT_PAY' | 'PAID' | 'CANCELED'
+  status: PaymentRequestStatus
   method: string
   note: string
   createdAt: string
   paidAt: string | null
 }
 
+export interface Payment {
+  id: string
+  paymentRequestId: string
+  customerId: string
+  orderId: string | null
+  type: PaymentType
+  amount: number
+  method: string
+  idempotencyKey: string
+  createdAt: string
+  status: PaymentStatus
+  voidedAt: string | null
+  voidReason: string | null
+}
+
 export interface PrepaidLedger {
   id: string
   customerId: string
   orderId: string | null
-  type: 'TOPUP' | 'DEDUCT' | 'REFUND' | 'ADJUST'
+  type: LedgerType
   amount: number
   balanceAfter: number
   note: string
+  idempotencyKey: string
   createdAt: string
 }
 
@@ -106,17 +128,22 @@ export interface ReconciliationIssue {
 export interface Product {
   id: string
   name: string
+  category: string
+  description: string
   amount: number
   supplierCost: number
   deliveryCost: number
   supplierId: string
   supplierName: string
+  status: ProductStatus
 }
 
 export interface Supplier {
   id: string
   name: string
   contact: string
+  status: SupplierStatus
+  notes: string
 }
 
 export interface DashboardSummary {
@@ -141,7 +168,7 @@ export interface OperationState {
   customers: Customer[]
   orders: Order[]
   paymentRequests: PaymentRequest[]
-  payments: unknown[]
+  payments: Payment[]
   prepaidLedger: PrepaidLedger[]
   supplierBatches: SupplierBatch[]
   issues: ReconciliationIssue[]

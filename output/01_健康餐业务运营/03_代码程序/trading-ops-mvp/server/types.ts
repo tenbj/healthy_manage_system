@@ -13,8 +13,11 @@ export type OrderStatus =
 export type PaymentRequestType = 'ORDER_PAYMENT' | 'PREPAID_TOPUP' | 'BALANCE_SHORTFALL'
 export type PaymentRequestStatus = 'WAIT_PAY' | 'PAID' | 'CANCELED'
 export type PaymentType = 'ORDER_PAYMENT' | 'PREPAID_TOPUP' | 'REFUND'
+export type PaymentStatus = 'POSTED' | 'VOIDED'
 export type LedgerType = 'TOPUP' | 'DEDUCT' | 'REFUND' | 'ADJUST'
 export type BatchStatus = 'GENERATED' | 'SENT' | 'CONFIRMED'
+export type ProductStatus = 'ACTIVE' | 'INACTIVE'
+export type SupplierStatus = 'ACTIVE' | 'INACTIVE'
 
 export interface Customer {
   id: string
@@ -80,6 +83,9 @@ export interface Payment {
   method: string
   idempotencyKey: string
   createdAt: string
+  status: PaymentStatus
+  voidedAt: string | null
+  voidReason: string | null
 }
 
 export interface PrepaidLedger {
@@ -133,17 +139,22 @@ export interface ReconciliationIssue {
 export interface Product {
   id: string
   name: string
+  category: string
+  description: string
   amount: number
   supplierCost: number
   deliveryCost: number
   supplierId: string
   supplierName: string
+  status: ProductStatus
 }
 
 export interface Supplier {
   id: string
   name: string
   contact: string
+  status: SupplierStatus
+  notes: string
 }
 
 export interface DashboardSummary {
@@ -185,6 +196,10 @@ export interface CreateCustomerInput {
   preference: string
 }
 
+export interface UpdateCustomerInput extends CreateCustomerInput {
+  status: CustomerStatus
+}
+
 export interface CreateOrderInput {
   customerId: string
   serviceDate: string
@@ -219,4 +234,26 @@ export interface RefundInput {
   amount: number
   reason: string
   idempotencyKey: string
+}
+
+export interface ProductInput {
+  name: string
+  category: string
+  description?: string
+  amount: number
+  supplierCost: number
+  deliveryCost: number
+  supplierId: string
+  status?: ProductStatus
+}
+
+export interface SupplierInput {
+  name: string
+  contact: string
+  status?: SupplierStatus
+  notes?: string
+}
+
+export interface VoidPaymentInput {
+  reason: string
 }
